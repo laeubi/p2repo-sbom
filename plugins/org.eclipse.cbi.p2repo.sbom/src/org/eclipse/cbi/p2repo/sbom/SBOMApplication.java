@@ -1006,6 +1006,8 @@ public class SBOMApplication implements IApplication {
 			component.setName(mavenDescriptor.artifactId());
 			component.setGroup(mavenDescriptor.groupId());
 			component.setPurl(mavenDescriptor.mavenPURL());
+			// VULNERABILITY INJECTION POINT: Query CVE databases for ancestor component
+			// using Maven coordinates or PURL. See docs/VULNERABILITY_INTEGRATION.md
 			return component;
 		}
 
@@ -1020,6 +1022,12 @@ public class SBOMApplication implements IApplication {
 				// If it's got a pedigree, use the original jar path.
 				component.setName(path);
 			}
+			// VULNERABILITY INJECTION POINT: Query CVE databases using Maven GAV coordinates:
+			// - mavenDescriptor.groupId()
+			// - mavenDescriptor.artifactId()
+			// - mavenDescriptor.version()
+			// Or using hash computed from bytes via BOMUtil.computeHash(algorithm, bytes)
+			// See docs/VULNERABILITY_INTEGRATION.md for details on CVE data sources
 			return component;
 		}
 
@@ -1182,6 +1190,10 @@ public class SBOMApplication implements IApplication {
 				if (equivalent(bytes, mavenArtifactBytes, differences)) {
 					var purl = mavenDescriptor.mavenPURL();
 					component.setPurl(purl);
+					// VULNERABILITY INJECTION POINT: After PURL is set and Maven artifact is verified,
+					// query vulnerability databases using Maven coordinates or PURL itself.
+					// The component is confirmed to exist in Maven Central at this point.
+					// See docs/VULNERABILITY_INTEGRATION.md for CVE data sources
 					return true;
 				}
 
@@ -1317,6 +1329,10 @@ public class SBOMApplication implements IApplication {
 				component.setData(List.of());
 				bytes = getArtifactBytes(getCompositeArtifactRepository(), artifactDescriptor);
 				addHashes(component, bytes);
+				// VULNERABILITY INJECTION POINT: After hashes are added to component,
+				// query vulnerability databases using the hash values (component.getHashes()).
+				// This is useful for components without Maven coordinates.
+				// See docs/VULNERABILITY_INTEGRATION.md for hash-based CVE data sources
 			}
 			return bytes;
 		}
@@ -1683,6 +1699,10 @@ public class SBOMApplication implements IApplication {
 					}
 				}
 			}
+			// VULNERABILITY INJECTION POINT: After gathering all POM information, we have access
+			// to the Maven document which contains groupId, artifactId, version. This is a good
+			// place to query vulnerability databases using the extracted Maven coordinates.
+			// See docs/VULNERABILITY_INTEGRATION.md for CVE data sources
 		}
 
 		private boolean isExcluded(IRequirement requirement) {
