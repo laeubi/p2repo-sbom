@@ -1020,6 +1020,10 @@ public class SBOMApplication implements IApplication {
 				// If it's got a pedigree, use the original jar path.
 				component.setName(path);
 			}
+
+			// Gather CPE information from Maven coordinates
+			gatherCPEInformation(component, mavenDescriptor);
+
 			return component;
 		}
 
@@ -1349,6 +1353,9 @@ public class SBOMApplication implements IApplication {
 				} catch (IOException e) {
 					throw new RuntimeException(e);
 				}
+
+				// Gather CPE information from Maven coordinates
+				gatherCPEInformation(component, mavenDescriptor);
 			}
 
 			var licenses = iu.getLicenses(null);
@@ -1683,6 +1690,119 @@ public class SBOMApplication implements IApplication {
 					}
 				}
 			}
+		}
+
+		/**
+		 * Gathers CPE (Common Platform Enumeration) information for a component based
+		 * on its Maven coordinates and updates the component with the CPE identifier.
+		 * <p>
+		 * CPE identifiers are standardized names for IT products used in vulnerability
+		 * databases like the National Vulnerability Database (NVD). This method
+		 * constructs a CPE 2.3 format identifier from Maven coordinates.
+		 * </p>
+		 * <p>
+		 * Future enhancements could include:
+		 * <ul>
+		 * <li>Querying NVD CPE API for authoritative CPE identifiers</li>
+		 * <li>Caching CPE lookups to reduce API calls</li>
+		 * <li>Supporting alternative CPE data sources</li>
+		 * </ul>
+		 * </p>
+		 * 
+		 * @param component       The component to update with CPE information
+		 * @param mavenDescriptor The Maven coordinates (groupId, artifactId, version)
+		 */
+		private void gatherCPEInformation(Component component, MavenDescriptor mavenDescriptor) {
+			if (mavenDescriptor == null) {
+				return;
+			}
+
+			try {
+				String vendor = normalizeVendorName(mavenDescriptor.groupId());
+				String product = mavenDescriptor.artifactId();
+				String version = mavenDescriptor.version();
+
+				// For now, construct CPE from Maven coordinates
+				// Future enhancement: Query NVD CPE API for authoritative CPE identifiers
+				String cpe = constructCPEFromMavenCoordinates(vendor, product, version);
+
+				if (cpe != null && !cpe.isEmpty()) {
+					component.setCpe(cpe);
+				}
+			} catch (Exception e) {
+				// Log but don't fail - CPE is supplementary information
+				if (verbose) {
+					System.err.println(
+							"Failed to gather CPE for " + mavenDescriptor.mavenPURL() + ": " + e.getMessage());
+				}
+			}
+		}
+
+		/**
+		 * Constructs a CPE 2.3 format identifier from Maven coordinates.
+		 * 
+		 * @param vendor  The vendor name (normalized from groupId)
+		 * @param product The product name (artifactId)
+		 * @param version The version string
+		 * @return CPE 2.3 format identifier
+		 */
+		private String constructCPEFromMavenCoordinates(String vendor, String product, String version) {
+			return String.format("cpe:2.3:a:%s:%s:%s:*:*:*:*:*:*:*", normalizeCPEComponent(vendor),
+					normalizeCPEComponent(product), normalizeCPEComponent(version));
+		}
+
+		/**
+		 * Normalizes a Maven groupId to a vendor name for CPE.
+		 * <p>
+		 * Applies common conventions for well-known vendors:
+		 * <ul>
+		 * <li>org.apache.* -> apache</li>
+		 * <li>com.google.* -> google</li>
+		 * <li>org.eclipse.* -> eclipse</li>
+		 * <li>com.fasterxml.* -> fasterxml</li>
+		 * <li>org.springframework.* -> springframework</li>
+		 * </ul>
+		 * For other groupIds, returns the last component.
+		 * </p>
+		 * 
+		 * @param groupId The Maven groupId
+		 * @return Normalized vendor name
+		 */
+		private String normalizeVendorName(String groupId) {
+			if (groupId.startsWith("org.apache.")) {
+				return "apache";
+			} else if (groupId.startsWith("com.google.")) {
+				return "google";
+			} else if (groupId.startsWith("org.eclipse.")) {
+				return "eclipse";
+			} else if (groupId.startsWith("com.fasterxml.")) {
+				return "fasterxml";
+			} else if (groupId.startsWith("org.springframework.")) {
+				return "springframework";
+			} else if (groupId.startsWith("io.netty.")) {
+				return "netty";
+			} else if (groupId.startsWith("org.slf4j.")) {
+				return "slf4j";
+			}
+
+			// Return last component by default
+			String[] parts = groupId.split("\\.");
+			return parts[parts.length - 1];
+		}
+
+		/**
+		 * Normalizes a CPE component according to CPE 2.3 naming rules.
+		 * <p>
+		 * CPE components should be lowercase and use underscores instead of spaces or
+		 * hyphens for better standardization.
+		 * </p>
+		 * 
+		 * @param component The component string to normalize
+		 * @return Normalized CPE component
+		 */
+		private String normalizeCPEComponent(String component) {
+			// CPE components use lowercase and replace certain characters
+			return component.toLowerCase().replace(" ", "_").replace("-", "_");
 		}
 
 		private boolean isExcluded(IRequirement requirement) {

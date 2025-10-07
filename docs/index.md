@@ -481,6 +481,35 @@ There are **many** available sources of potential external reference information
 - The OSGi `MANIFEST.MF` `Bundle-DocURL`, `Bundle-SCM`, and `Eclipse-SourceReferences` headers.
 - Various elements, e.g., `connection`, in a POM.
 
+### CPE (Common Platform Enumeration)
+
+The generator provides [CPE](https://cyclonedx.org/docs/1.6/json/#components_items_cpe) (Common Platform Enumeration) identifiers
+for components derived from Maven artifacts.
+CPE is a standardized naming scheme for IT products and platforms,
+enabling better correlation with vulnerability databases such as the [National Vulnerability Database (NVD)](https://nvd.nist.gov/).
+
+CPE identifiers follow the [CPE 2.3 format](https://nvd.nist.gov/products/cpe):
+```
+cpe:2.3:a:vendor:product:version:*:*:*:*:*:*:*
+```
+
+For example, a component with Maven coordinates `org.apache.commons:commons-logging:1.2` would receive:
+```
+cpe:2.3:a:apache:commons_logging:1.2:*:*:*:*:*:*:*
+```
+
+The CPE identifier is constructed from the Maven coordinates:
+- **vendor**: Normalized from the Maven `groupId` (e.g., `org.apache.commons` becomes `apache`)
+- **product**: Normalized from the Maven `artifactId` (e.g., `commons-logging` becomes `commons_logging`)
+- **version**: The Maven version
+
+The generator applies common conventions for well-known vendors such as Apache, Google, Eclipse, and others.
+CPE identifiers are generated for both top-level components and nested JAR components when Maven coordinates are available.
+
+**Note**: The current implementation constructs CPE identifiers directly from Maven coordinates.
+Future enhancements may include querying authoritative sources like the NVD CPE API for verified CPE identifiers.
+See [CPE Integration Investigation](CPE_INTEGRATION.md) for more details on potential data sources and integration approaches.
+
 ### Dependencies
 
 As mentioned previously,
