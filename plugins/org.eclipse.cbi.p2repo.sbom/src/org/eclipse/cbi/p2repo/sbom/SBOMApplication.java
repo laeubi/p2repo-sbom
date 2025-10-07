@@ -445,6 +445,8 @@ public class SBOMApplication implements IApplication {
 
 		private final String jsonOutput;
 
+		private final boolean validate;
+
 		private final URI installationLocation;
 
 		private IMetadataRepositoryManager metadataRepositoryManager;
@@ -499,6 +501,7 @@ public class SBOMApplication implements IApplication {
 			jsonOutput = getArgument("-json-output", args, null);
 			json = getArgument("-json", args);
 			xml = getArgument("-xml", args) || !json && xmlOutput == null && jsonOutput == null;
+			validate = getArgument("-validate", args);
 		}
 
 		private List<Path> getOutputs() {
@@ -739,6 +742,10 @@ public class SBOMApplication implements IApplication {
 
 			generateXML(bom);
 			generateJson(bom);
+
+			if (validate) {
+				validateOutputs();
+			}
 
 			return Status.OK_STATUS;
 		}
@@ -1941,6 +1948,68 @@ public class SBOMApplication implements IApplication {
 				} finally {
 					undoables.forEach(Runnable::run);
 				}
+			}
+		}
+
+		private void validateOutputs() {
+			if (outputs.isEmpty()) {
+				System.err.println("Warning: No output files to validate. Use -xml-output or -json-output to generate files for validation.");
+				return;
+			}
+
+			boolean validationAvailable = false;
+			try {
+				// Check if validation libraries are available
+				Class.forName("org.cyclonedx.parsers.JsonParser");
+				Class.forName("com.networknt.schema.JsonSchemaFactory");
+				validationAvailable = true;
+			} catch (ClassNotFoundException e) {
+				// Validation libraries not available
+			}
+
+			if (!validationAvailable) {
+				System.err.println("Warning: Validation libraries not available. Install cyclonedx-core-java with validation support.");
+				System.err.println("Alternatively, use the cyclonedx-cli tool for validation:");
+				System.err.println("  cyclonedx validate --input-file <sbom-file>");
+				return;
+			}
+
+			try {
+				Class<?> jsonParserClass = Class.forName("org.cyclonedx.parsers.JsonParser");
+				Class<?> xmlParserClass = Class.forName("org.cyclonedx.parsers.XmlParser");
+
+				for (Path output : outputs) {
+					String filename = output.getFileName().toString();
+					boolean isJson = filename.endsWith(".json");
+					boolean isXml = filename.endsWith(".xml");
+
+					if (!isJson && !isXml) {
+						continue;
+					}
+
+					System.out.println("Validating: " + output);
+
+					try {
+						String content = Files.readString(output);
+						Object parser = isJson ? jsonParserClass.getDeclaredConstructor().newInstance()
+								: xmlParserClass.getDeclaredConstructor().newInstance();
+
+						// Parse the SBOM to validate it
+						java.lang.reflect.Method parseMethod = parser.getClass().getMethod("parse",
+								byte[].class);
+						parseMethod.invoke(parser, content.getBytes(StandardCharsets.UTF_8));
+
+						System.out.println("✓ Validation successful: " + output);
+					} catch (Exception e) {
+						System.err.println("✗ Validation failed for " + output + ": " + e.getMessage());
+						Throwable cause = e.getCause();
+						if (cause != null) {
+							System.err.println("  Cause: " + cause.getMessage());
+						}
+					}
+				}
+			} catch (Exception e) {
+				System.err.println("Error during validation: " + e.getMessage());
 			}
 		}
 
