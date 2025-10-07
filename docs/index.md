@@ -434,13 +434,52 @@ and will therefore have different hash sums.
 ### Licenses
 
 [Licenses](https://cyclonedx.org/docs/1.6/json/#components_items_licenses) are computed on an ad hoc basis for each mapped component.
-There are **many** available sources of potential license information.
+There are **many** available sources of potential license information:
 - The p2 license metadata.
 - The OSGi `MANIFEST.MF` `Bundle-License` header.
 - The `license` element in a POM.
-- Various embedded license documents in the artifact, e.g., `about.html`.
+- Various embedded license documents in the artifact, e.g., `about.html`, `LICENSE`, `LICENSE.txt`.
+- [SPDX license identifiers](https://spdx.org/licenses/) embedded in source files (e.g., `SPDX-License-Identifier: EPL-2.0`).
 
 Often this information is recorded in a poorly standardized way, making reliable extraction by the CBI p2 SBOM generator an ongoing challenge.
+
+#### SPDX License Identifiers
+
+The CBI p2 SBOM generator validates license information against the official [SPDX License List](https://spdx.org/licenses/).
+When a valid SPDX license identifier is detected (e.g., `EPL-2.0`, `Apache-2.0`, `MIT`), it is recorded using the license's 
+[id](https://cyclonedx.org/docs/1.6/json/#components_items_licenses_oneOf_i0_items_license_id) field for compliance with 
+CycloneDX v1.6 schema requirements.
+
+The generator extracts SPDX identifiers from:
+- **Bundle-License headers**: Parsed from OSGi `MANIFEST.MF` files, with common license names mapped to SPDX IDs.
+- **POM files**: Extracted from Maven `pom.xml` `<license>` elements, with license names validated against the SPDX list.
+- **SPDX license identifier tags**: Pattern-matched from license files and source code headers (e.g., `SPDX-License-Identifier: BSD-3-Clause`).
+- **ClearlyDefined API**: License information obtained from ClearlyDefined for Maven artifacts is also validated.
+
+For non-SPDX license information, the generator uses the license's [name](https://cyclonedx.org/docs/1.6/json/#components_items_licenses_oneOf_i0_items_license_name)
+field for backward compatibility.
+
+#### SBOM Validation
+
+The CBI p2 SBOM generator includes built-in validation support via the `-validate` command-line flag.
+When this flag is used, the generator will validate all generated SBOM files (XML and JSON) after generation.
+
+**Usage:**
+```bash
+sbom-generator -input <repository-url> -xml-output sbom.xml -validate
+```
+
+The validation process:
+1. Parses each generated SBOM file using CycloneDX parsers
+2. Validates the structure against the CycloneDX v1.6 schema
+3. Reports validation success or detailed error messages
+
+**Note:** Validation requires the optional CycloneDX parser libraries. If these are not available, the generator will:
+- Display a warning message
+- Suggest using the external [cyclonedx-cli](https://github.com/CycloneDX/cyclonedx-cli) tool for validation:
+  ```bash
+  cyclonedx validate --input-file sbom.xml
+  ```
 
 ### Details
 
