@@ -1,0 +1,101 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
+<html>
+<head>
+	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+	<title>SBOM Generator</title>
+	<link rel="stylesheet" type="text/css" href="../../../PRODUCT_PLUGIN/book.css">
+</head>
+<body>
+<h1>SBOM Generator</h1>
+
+<p>The SBOM (Software Bill of Materials) Generator creates a comprehensive inventory of all software components 
+in your Eclipse installation in CycloneDX format.</p>
+
+<h2>Overview</h2>
+<p>A Software Bill of Materials (SBOM) is a formal, machine-readable inventory of software components and dependencies, 
+information about those components, and their hierarchical relationships. This tool generates SBOMs for Eclipse 
+installations in both XML and JSON formats following the CycloneDX specification.</p>
+
+<h2>Using the SBOM Generator</h2>
+
+<h3>Accessing the Generator</h3>
+<p>To generate an SBOM for your Eclipse installation:</p>
+<ol>
+	<li>From the menu bar, select <b>Help &gt; Generate SBOM...</b></li>
+	<li>The SBOM Generator dialog will open with configuration options</li>
+</ol>
+
+<h3>Configuration Options</h3>
+
+<h4>Installation Location</h4>
+<p>The Eclipse installation location is automatically detected and cannot be changed. 
+This is the directory where Eclipse is installed and will be analyzed to generate the SBOM.</p>
+
+<h4>Output Files</h4>
+<ul>
+	<li><b>XML Output:</b> Specify the path where the XML format SBOM will be saved. 
+	The default location is in the parent directory of your Eclipse installation.</li>
+	<li><b>JSON Output:</b> Specify the path where the JSON format SBOM will be saved. 
+	The default location is in the parent directory of your Eclipse installation.</li>
+</ul>
+<p>You can leave either field empty if you don't want to generate that format.</p>
+
+<h4>Options</h4>
+<ul>
+	<li><b>Verbose output:</b> Enable detailed logging during the SBOM generation process. 
+	This is useful for troubleshooting or understanding what the generator is doing.</li>
+	
+	<li><b>Search Maven Central:</b> Query Maven Central repository for additional information 
+	about artifacts. This can provide more complete metadata but requires internet connectivity 
+	and may slow down the generation process.</li>
+	
+	<li><b>Fetch advisories:</b> Query the OSV (Open Source Vulnerabilities) database for 
+	security advisories related to the components. This requires internet connectivity.</li>
+	
+	<li><b>Process Bundle-ClassPath:</b> Analyze and include nested JAR files that are 
+	referenced in OSGi Bundle-ClassPath manifest entries. This provides a more complete 
+	inventory but may increase processing time.</li>
+</ul>
+
+<h3>Generating the SBOM</h3>
+<ol>
+	<li>Configure the desired output locations and options</li>
+	<li>Click <b>Generate</b> to start the process</li>
+	<li>The generation will run as a background job</li>
+	<li>Progress can be monitored in the Progress view</li>
+	<li>Upon completion, the SBOM files will be available at the specified locations</li>
+</ol>
+
+<h2>Understanding the SBOM</h2>
+
+<p>The generated SBOM contains:</p>
+<ul>
+	<li>Complete list of all Eclipse plugins and features</li>
+	<li>Version information for each component</li>
+	<li>License information where available</li>
+	<li>Component relationships and dependencies</li>
+	<li>Package URLs (PURLs) for component identification</li>
+	<li>Hash values for artifact verification</li>
+	<li>External references (websites, source repositories, issue trackers)</li>
+	<li>Security advisories (if fetch advisories option is enabled)</li>
+</ul>
+
+<h2>Viewing the SBOM</h2>
+
+<p>The generated SBOM files can be:</p>
+<ul>
+	<li>Viewed in any text editor</li>
+	<li>Processed by SBOM analysis tools</li>
+	<li>Imported into dependency tracking systems</li>
+	<li>Used for license compliance reporting</li>
+	<li>Analyzed for security vulnerabilities</li>
+</ul>
+
+<h2>Additional Resources</h2>
+<ul>
+	<li><a href="https://cyclonedx.org/">CycloneDX Specification</a></li>
+	<li><a href="https://github.com/eclipse-cbi/p2repo-sbom">SBOM Generator Project on GitHub</a></li>
+</ul>
+
+</body>
+</html>
