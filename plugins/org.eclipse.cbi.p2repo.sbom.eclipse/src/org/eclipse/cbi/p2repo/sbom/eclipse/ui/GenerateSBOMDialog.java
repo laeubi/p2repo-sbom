@@ -210,6 +210,9 @@ public class GenerateSBOMDialog extends Dialog {
 		job.schedule();
 	}
 
+	private static final java.util.regex.Pattern WINDOWS_PATH_PATTERN = 
+			java.util.regex.Pattern.compile("^/[A-Za-z]:.*");
+	
 	private String getEclipseInstallLocation() {
 		// Get the Eclipse installation location from the osgi.install.area property
 		String installArea = System.getProperty("osgi.install.area");
@@ -219,7 +222,7 @@ public class GenerateSBOMDialog extends Dialog {
 				installArea = installArea.substring(5);
 			}
 			// On Windows, remove leading slash
-			if (installArea.matches("^/[A-Za-z]:.*")) {
+			if (WINDOWS_PATH_PATTERN.matcher(installArea).matches()) {
 				installArea = installArea.substring(1);
 			}
 			return installArea;
@@ -229,11 +232,19 @@ public class GenerateSBOMDialog extends Dialog {
 
 	private String getDefaultOutputPath(String extension) {
 		String installLocation = getEclipseInstallLocation();
-		if (installLocation.isEmpty()) {
+		if (installLocation == null || installLocation.isEmpty()) {
 			return "";
 		}
-		Path path = Path.of(installLocation);
-		String fileName = path.getFileName().toString() + "-sbom" + extension;
-		return path.getParent().resolve(fileName).toString();
+		try {
+			Path path = Path.of(installLocation);
+			String fileName = path.getFileName().toString() + "-sbom" + extension;
+			Path parent = path.getParent();
+			if (parent != null) {
+				return parent.resolve(fileName).toString();
+			}
+			return fileName;
+		} catch (java.nio.file.InvalidPathException e) {
+			return "";
+		}
 	}
 }

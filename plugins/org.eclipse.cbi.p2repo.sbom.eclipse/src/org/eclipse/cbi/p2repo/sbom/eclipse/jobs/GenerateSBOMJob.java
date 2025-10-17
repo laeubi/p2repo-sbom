@@ -134,7 +134,7 @@ public class GenerateSBOMJob extends Job {
 
 			// Call the SBOMApplication
 			SBOMApplication app = new SBOMApplication();
-			Object result = app.start(context);
+			app.start(context);
 
 			if (monitor.isCanceled()) {
 				return Status.CANCEL_STATUS;
