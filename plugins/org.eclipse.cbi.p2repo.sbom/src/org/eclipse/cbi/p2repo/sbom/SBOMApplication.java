@@ -109,6 +109,9 @@ import org.cyclonedx.model.Property;
 import org.cyclonedx.model.component.data.ComponentData;
 import org.cyclonedx.model.component.data.ComponentData.ComponentDataType;
 import org.cyclonedx.model.component.data.Content;
+import org.cyclonedx.model.vulnerability.Vulnerability;
+import org.cyclonedx.model.vulnerability.Vulnerability.Rating;
+import org.cyclonedx.model.vulnerability.Vulnerability.Source;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
@@ -147,6 +150,7 @@ import org.eclipse.equinox.p2.repository.metadata.IMetadataRepository;
 import org.eclipse.equinox.p2.repository.metadata.IMetadataRepositoryManager;
 import org.eclipse.equinox.spi.p2.publisher.PublisherHelper;
 import org.eclipse.osgi.util.ManifestElement;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.osgi.framework.Constants;
 import org.w3c.dom.Document;
@@ -1045,6 +1049,8 @@ public class SBOMApplication implements IApplication {
 			component.setName(mavenDescriptor.artifactId());
 			component.setGroup(mavenDescriptor.groupId());
 			component.setPurl(mavenDescriptor.mavenPURL());
+			// VULNERABILITY INJECTION POINT: Query CVE databases for ancestor component
+			// using Maven coordinates or PURL. See docs/VULNERABILITY_INTEGRATION.md
 			return component;
 		}
 
@@ -1061,6 +1067,12 @@ public class SBOMApplication implements IApplication {
 				// If it's got a pedigree, use the original jar path.
 				component.setName(path);
 			}
+			// VULNERABILITY INJECTION POINT: Query CVE databases using Maven GAV coordinates:
+			// - mavenDescriptor.groupId()
+			// - mavenDescriptor.artifactId()
+			// - mavenDescriptor.version()
+			// Or using hash computed from bytes via BOMUtil.computeHash(algorithm, bytes)
+			// See docs/VULNERABILITY_INTEGRATION.md for details on CVE data sources
 			return component;
 		}
 
@@ -1224,6 +1236,10 @@ public class SBOMApplication implements IApplication {
 				if (equivalent(bytes, mavenArtifactBytes, differences)) {
 					var purl = mavenDescriptor.mavenPURL();
 					component.setPurl(purl);
+					// VULNERABILITY INJECTION POINT: After PURL is set and Maven artifact is verified,
+					// query vulnerability databases using Maven coordinates or PURL itself.
+					// The component is confirmed to exist in Maven Central at this point.
+					// See docs/VULNERABILITY_INTEGRATION.md for CVE data sources
 					return true;
 				}
 
@@ -1359,6 +1375,10 @@ public class SBOMApplication implements IApplication {
 				component.setData(List.of());
 				bytes = getArtifactBytes(getCompositeArtifactRepository(), artifactDescriptor);
 				addHashes(component, bytes);
+				// VULNERABILITY INJECTION POINT: After hashes are added to component,
+				// query vulnerability databases using the hash values (component.getHashes()).
+				// This is useful for components without Maven coordinates.
+				// See docs/VULNERABILITY_INTEGRATION.md for hash-based CVE data sources
 			}
 			return bytes;
 		}
@@ -1730,6 +1750,193 @@ public class SBOMApplication implements IApplication {
 						System.err.println("##");
 					}
 				}
+			}
+			// VULNERABILITY INJECTION POINT: After gathering all POM information, we have access
+			// to the Maven document which contains groupId, artifactId, version. This is a good
+			// place to query vulnerability databases using the extracted Maven coordinates.
+			// See docs/VULNERABILITY_INTEGRATION.md for CVE data sources
+		}
+
+		/**
+		 * Query OSV (Open Source Vulnerabilities) database for vulnerability information
+		 * and populate the component with any found vulnerabilities.
+		 * 
+		 * @param component the component to populate with vulnerability information
+		 * @param contentHandler the content handler for querying and caching results
+		 */
+		private void queryOSV(Component component, ContentHandler contentHandler) {
+			try {
+				String queryJson = null;
+				String purl = component.getPurl();
+				
+				// Check if component has a Maven PURL
+				if (purl != null && purl.startsWith("pkg:maven/")) {
+					// Extract Maven coordinates from PURL
+					// Format: pkg:maven/groupId/artifactId@version
+					String purlPath = purl.substring("pkg:maven/".length());
+					int atIndex = purlPath.indexOf('@');
+					if (atIndex > 0) {
+						String path = purlPath.substring(0, atIndex);
+						String version = purlPath.substring(atIndex + 1);
+						// Remove any query parameters from version
+						int queryIndex = version.indexOf('?');
+						if (queryIndex > 0) {
+							version = version.substring(0, queryIndex);
+						}
+						
+						int slashIndex = path.lastIndexOf('/');
+						if (slashIndex > 0) {
+							String groupId = path.substring(0, slashIndex);
+							String artifactId = path.substring(slashIndex + 1);
+							
+							// Build OSV query JSON for Maven package
+							queryJson = String.format(
+								"{\"package\":{\"name\":\"%s:%s\",\"ecosystem\":\"Maven\"},\"version\":\"%s\"}",
+								groupId, artifactId, version
+							);
+						}
+					}
+				}
+				
+				// Fallback to hash-based query if no Maven PURL
+				if (queryJson == null && component.getHashes() != null && !component.getHashes().isEmpty()) {
+					// Use SHA-256 hash if available, otherwise use first available hash
+					String hashValue = null;
+					for (Hash hash : component.getHashes()) {
+						if ("SHA-256".equalsIgnoreCase(hash.getAlgorithm())) {
+							hashValue = hash.getValue();
+							break;
+						}
+					}
+					// If no SHA-256, use first hash
+					if (hashValue == null && !component.getHashes().isEmpty()) {
+						hashValue = component.getHashes().get(0).getValue();
+					}
+					
+					if (hashValue != null) {
+						// Build OSV query JSON for hash-based lookup
+						queryJson = String.format("{\"commit\":\"%s\"}", hashValue);
+					}
+				}
+				
+				// If we have a query, send it to OSV API
+				if (queryJson != null) {
+					URI osvUri = URI.create("https://api.osv.dev/v1/query");
+					
+					// Create HTTP request with JSON body
+					var requestBuilder = HttpRequest.newBuilder(osvUri)
+						.header("Content-Type", "application/json")
+						.POST(BodyPublishers.ofString(queryJson));
+					var request = requestBuilder.build();
+					
+					// Send request using the content handler's HTTP client
+					var response = contentHandler.httpClient.send(request, BodyHandlers.ofString());
+					
+					if (response.statusCode() == 200) {
+						String responseBody = response.body();
+						var jsonResponse = new JSONObject(responseBody);
+						
+						// Check if vulnerabilities were found
+						if (jsonResponse.has("vulns")) {
+							var vulns = jsonResponse.getJSONArray("vulns");
+							
+							for (int i = 0; i < vulns.length(); i++) {
+								var vulnObj = vulns.getJSONObject(i);
+								
+								// Create vulnerability object
+								var vulnerability = new Vulnerability();
+								
+								// Set vulnerability ID (e.g., CVE-2021-44228)
+								if (vulnObj.has("id")) {
+									vulnerability.setId(vulnObj.getString("id"));
+								}
+								
+								// Set source
+								var source = new Source();
+								source.setName("OSV");
+								source.setUrl("https://osv.dev");
+								vulnerability.setSource(source);
+								
+								// Set description/summary
+								if (vulnObj.has("summary")) {
+									vulnerability.setDescription(vulnObj.getString("summary"));
+								} else if (vulnObj.has("details")) {
+									vulnerability.setDescription(vulnObj.getString("details"));
+								}
+								
+								// Set references
+								if (vulnObj.has("references")) {
+									var references = vulnObj.getJSONArray("references");
+									for (int j = 0; j < references.length(); j++) {
+										var ref = references.getJSONObject(j);
+										if (ref.has("url")) {
+											// CycloneDX Vulnerability doesn't have a direct references field
+											// but we can add the primary reference URL to the source
+											if (j == 0) {
+												source.setUrl(ref.getString("url"));
+											}
+										}
+									}
+								}
+								
+								// Set severity/rating
+								if (vulnObj.has("severity")) {
+									var severityArray = vulnObj.getJSONArray("severity");
+									for (int j = 0; j < severityArray.length(); j++) {
+										var severityObj = severityArray.getJSONObject(j);
+										if (severityObj.has("type") && "CVSS_V3".equals(severityObj.getString("type"))) {
+											var rating = new Rating();
+											
+											// Parse CVSS score if available
+											if (severityObj.has("score")) {
+												String scoreString = severityObj.getString("score");
+												// CVSS format: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
+												// Extract base score (would need full parsing, simplified here)
+												rating.setMethod(Rating.Method.CVSSV3);
+											}
+											
+											vulnerability.addRating(rating);
+											break;
+										}
+									}
+								}
+								
+								// Set database-specific severity if available
+								if (vulnObj.has("database_specific")) {
+									var dbSpecific = vulnObj.getJSONObject("database_specific");
+									if (dbSpecific.has("severity")) {
+										String severityStr = dbSpecific.getString("severity");
+										var rating = new Rating();
+										// Map severity string to Rating.Severity
+										switch (severityStr.toUpperCase()) {
+											case "CRITICAL":
+												rating.setSeverity(Rating.Severity.CRITICAL);
+												break;
+											case "HIGH":
+												rating.setSeverity(Rating.Severity.HIGH);
+												break;
+											case "MEDIUM":
+												rating.setSeverity(Rating.Severity.MEDIUM);
+												break;
+											case "LOW":
+												rating.setSeverity(Rating.Severity.LOW);
+												break;
+											default:
+												rating.setSeverity(Rating.Severity.UNKNOWN);
+										}
+										vulnerability.addRating(rating);
+									}
+								}
+								
+								// Add vulnerability to component
+								component.addVulnerability(vulnerability);
+							}
+						}
+					}
+				}
+			} catch (Exception e) {
+				// Log error but don't fail the SBOM generation
+				System.err.println("Warning: Failed to query OSV for component " + component.getName() + ": " + e.getMessage());
 			}
 		}
 

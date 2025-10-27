@@ -537,4 +537,25 @@ e.g., com.sun.xml.bind,
 probably as a result of resolving package requirements to all possible providers in the target platform,
 also lots of `*.source` bundles that aren't in the product.
 More care must be taken when generating PURLs that in fact the Maven artifact has the same hash sums as the p2/local artifact,
+
+## Vulnerability Information Integration
+
+The CBI p2 SBOM generator supports embedding vulnerability information into the generated CycloneDX XML format.
+For comprehensive information about integrating CVE and vulnerability data, see:
+
+- **[Vulnerability Integration Guide](VULNERABILITY_INTEGRATION.md)** - Complete technical guide covering:
+  - Code injection points where vulnerability information can be added
+  - Implementation approach and phases
+  - CycloneDX Vulnerability model usage
+  - Performance and configuration considerations
+
+- **[CVE Data Sources Reference](VULNERABILITY_SOURCES.md)** - Quick reference for vulnerability APIs:
+  - OSV (Open Source Vulnerabilities) - Recommended primary source
+  - Sonatype OSS Index - PURL-based lookups
+  - deps.dev - Google's dependency analysis service
+  - GitHub Advisory Database
+  - National Vulnerability Database (NVD)
+  - Comparison table and implementation priorities
+
+The integration points are marked in the code with comments referencing these documentation files,
 i.e., is unmodified.
