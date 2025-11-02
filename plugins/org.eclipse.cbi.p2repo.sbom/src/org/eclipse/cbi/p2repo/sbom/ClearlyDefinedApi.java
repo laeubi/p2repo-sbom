@@ -15,12 +15,13 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Date;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -36,8 +37,7 @@ import static org.eclipse.cbi.p2repo.sbom.BOMUtil.createProperty;
  * 
  * This class manages asynchronous requests to the ClearlyDefined API and respects
  * rate limits by monitoring the x-ratelimit-limit and x-ratelimit-remaining response
- * headers. It uses a fixed thread pool with 9 threads (1 queue processor + 8 workers)
- * to process requests asynchronously.
+ * headers. It uses a shared executor service to process requests asynchronously.
  */
 public class ClearlyDefinedApi {
 	
@@ -74,21 +74,19 @@ public class ClearlyDefinedApi {
 	private final boolean verbose;
 	
 	private static final int MAX_RETRIES = 3;
-	private static final int WORKER_THREADS = 8;
-	private static final int TOTAL_THREADS = WORKER_THREADS + 1; // +1 for queue processor
 	
-	public ClearlyDefinedApi(ContentHandler contentHandler) {
-		this(contentHandler, false);
+	public ClearlyDefinedApi(ContentHandler contentHandler, ExecutorService executorService) {
+		this(contentHandler, executorService, false);
 	}
 	
-	public ClearlyDefinedApi(ContentHandler contentHandler, boolean verbose) {
+	public ClearlyDefinedApi(ContentHandler contentHandler, ExecutorService executorService, boolean verbose) {
 		this.contentHandler = contentHandler;
+		this.executorService = executorService;
 		this.verbose = verbose;
 		this.httpClient = HttpClient.newBuilder()
 				.followRedirects(HttpClient.Redirect.NORMAL)
 				.build();
 		this.requestQueue = new LinkedBlockingQueue<>();
-		this.executorService = Executors.newFixedThreadPool(WORKER_THREADS);
 		this.activeFutures = new ConcurrentHashMap<>();
 		
 		this.rateLimitRemaining = new AtomicInteger(-1); // -1 means unknown
@@ -101,10 +99,6 @@ public class ClearlyDefinedApi {
 		this.queueProcessor = new Thread(this::processQueue, "ClearlyDefined-Queue-Processor");
 		this.queueProcessor.setDaemon(true);
 		this.queueProcessor.start();
-		
-		if (verbose) {
-			System.out.println("ClearlyDefinedApi initialized with " + WORKER_THREADS + " worker threads");
-		}
 	}
 	
 	/**
@@ -165,16 +159,11 @@ public class ClearlyDefinedApi {
 	
 	/**
 	 * Shutdown the API and release resources.
+	 * Note: Does not shutdown the executor service as it's shared.
 	 */
 	public void shutdown() {
 		shutdown = true;
 		queueProcessor.interrupt();
-		executorService.shutdown();
-		try {
-			executorService.awaitTermination(30, TimeUnit.SECONDS);
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-		}
 	}
 	
 	private boolean hasActiveFutures() {
@@ -303,8 +292,8 @@ public class ClearlyDefinedApi {
 	private void saveToPersistentCache(URI uri, String content) {
 		try {
 			Path cachePath = contentHandler.getCachePath(uri);
-			java.nio.file.Files.createDirectories(cachePath.getParent());
-			java.nio.file.Files.writeString(cachePath, content);
+			Files.createDirectories(cachePath.getParent());
+			Files.writeString(cachePath, content);
 		} catch (IOException e) {
 			System.err.println("Failed to save to persistent cache: " + uri + " - " + e.getMessage());
 		}
@@ -316,8 +305,8 @@ public class ClearlyDefinedApi {
 	private void saveToPersistentCache404(URI uri) {
 		try {
 			Path cachePath404 = contentHandler.getCachePath404(uri);
-			java.nio.file.Files.createDirectories(cachePath404.getParent());
-			java.nio.file.Files.writeString(cachePath404, "");
+			Files.createDirectories(cachePath404.getParent());
+			Files.writeString(cachePath404, "");
 		} catch (IOException e) {
 			System.err.println("Failed to save 404 marker to persistent cache: " + uri + " - " + e.getMessage());
 		}
@@ -354,7 +343,7 @@ public class ClearlyDefinedApi {
 							long resetEpoch = Long.parseLong(resetValue);
 							rateLimitResetTime.set(resetEpoch * 1000); // Convert to milliseconds
 							if (verbose) {
-								System.out.println("ClearlyDefined rate limit reset at: " + new java.util.Date(resetEpoch * 1000));
+								System.out.println("ClearlyDefined rate limit reset at: " + new Date(resetEpoch * 1000));
 							}
 						} catch (NumberFormatException e) {
 							System.err.println("Invalid x-ratelimit-reset header: " + resetValue);
