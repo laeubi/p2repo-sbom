@@ -137,22 +137,19 @@ public class ClearlyDefinedApi {
 	 * @throws InterruptedException if the wait is interrupted
 	 */
 	public void waitForCompletion() throws InterruptedException {
-		// First wait for queue to drain and all active futures to complete
-		while (!requestQueue.isEmpty() || hasActiveFutures()) {
-			// Use a slightly longer sleep to reduce CPU usage in polling
+		// Wait for queue to drain and all active futures to complete
+		while (!requestQueue.isEmpty() || !activeFutures.isEmpty()) {
 			Thread.sleep(100);
 		}
 		
-		// Give a final moment for any in-flight requests to update state
-		if (!activeFutures.isEmpty()) {
-			CompletableFuture<?>[] futuresArray = activeFutures.keySet().toArray(new CompletableFuture<?>[0]);
-			if (futuresArray.length > 0) {
-				try {
-					CompletableFuture.allOf(futuresArray).get(30, TimeUnit.SECONDS);
-				} catch (Exception e) {
-					// Log but don't fail - some requests may have legitimately failed
-					System.err.println("Some ClearlyDefined requests did not complete: " + e.getMessage());
-				}
+		// Final wait for any remaining futures
+		CompletableFuture<?>[] remaining = activeFutures.keySet().toArray(new CompletableFuture<?>[0]);
+		if (remaining.length > 0) {
+			try {
+				CompletableFuture.allOf(remaining).get(30, TimeUnit.SECONDS);
+			} catch (Exception e) {
+				// Some requests may have legitimately failed
+				System.err.println("Some ClearlyDefined requests did not complete: " + e.getMessage());
 			}
 		}
 	}
@@ -164,10 +161,6 @@ public class ClearlyDefinedApi {
 	public void shutdown() {
 		shutdown = true;
 		queueProcessor.interrupt();
-	}
-	
-	private boolean hasActiveFutures() {
-		return !activeFutures.isEmpty();
 	}
 	
 	/**
