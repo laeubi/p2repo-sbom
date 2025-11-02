@@ -15,8 +15,6 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Date;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
@@ -48,13 +46,11 @@ public class ClearlyDefinedApi {
 		final Component component;
 		final URI uri;
 		final CompletableFuture<Void> future;
-		int retryCount;
 		
 		ClearlyDefinedRequest(Component component, URI uri) {
 			this.component = component;
 			this.uri = uri;
 			this.future = new CompletableFuture<>();
-			this.retryCount = 0;
 		}
 	}
 	
@@ -62,7 +58,7 @@ public class ClearlyDefinedApi {
 	private final BlockingQueue<ClearlyDefinedRequest> requestQueue;
 	private final ExecutorService executorService;
 	private final ContentHandler contentHandler;
-	private final ConcurrentHashMap<CompletableFuture<Void>, Boolean> activeFutures;
+	private final ConcurrentHashMap.KeySetView<CompletableFuture<Void>, Boolean> activeFutures;
 	
 	private final AtomicInteger rateLimitRemaining;
 	private final AtomicInteger rateLimitTotal;
@@ -72,8 +68,7 @@ public class ClearlyDefinedApi {
 	private final Thread queueProcessor;
 	
 	private final boolean verbose;
-	
-	private static final int MAX_RETRIES = 3;
+	private final Object lock = new Object();
 	
 	public ClearlyDefinedApi(ContentHandler contentHandler, ExecutorService executorService) {
 		this(contentHandler, executorService, false);
@@ -87,7 +82,7 @@ public class ClearlyDefinedApi {
 				.followRedirects(HttpClient.Redirect.NORMAL)
 				.build();
 		this.requestQueue = new LinkedBlockingQueue<>();
-		this.activeFutures = new ConcurrentHashMap<>();
+		this.activeFutures = ConcurrentHashMap.newKeySet();
 		
 		this.rateLimitRemaining = new AtomicInteger(-1); // -1 means unknown
 		this.rateLimitTotal = new AtomicInteger(-1);
@@ -125,42 +120,44 @@ public class ClearlyDefinedApi {
 		}
 		
 		ClearlyDefinedRequest request = new ClearlyDefinedRequest(component, uri);
-		activeFutures.put(request.future, Boolean.TRUE);
-		request.future.whenComplete((v, e) -> activeFutures.remove(request.future));
-		requestQueue.offer(request);
+		synchronized (lock) {
+			activeFutures.add(request.future);
+			request.future.whenComplete((v, e) -> {
+				synchronized (lock) {
+					activeFutures.remove(request.future);
+					lock.notifyAll();
+				}
+			});
+			requestQueue.offer(request);
+		}
 		return request.future;
 	}
 	
 	/**
-	 * Wait for all pending requests to complete.
+	 * Wait for all pending requests to complete and shutdown the queue processor.
 	 * 
 	 * @throws InterruptedException if the wait is interrupted
 	 */
 	public void waitForCompletion() throws InterruptedException {
-		// Wait for queue to drain and all active futures to complete
-		while (!requestQueue.isEmpty() || !activeFutures.isEmpty()) {
-			Thread.sleep(100);
-		}
-		
-		// Final wait for any remaining futures
-		CompletableFuture<?>[] remaining = activeFutures.keySet().toArray(new CompletableFuture<?>[0]);
-		if (remaining.length > 0) {
-			try {
-				CompletableFuture.allOf(remaining).get(30, TimeUnit.SECONDS);
-			} catch (Exception e) {
-				// Some requests may have legitimately failed
-				System.err.println("Some ClearlyDefined requests did not complete: " + e.getMessage());
+		while (true) {
+			synchronized (lock) {
+				if (requestQueue.isEmpty() && activeFutures.isEmpty()) {
+					// All done, shutdown the queue processor
+					shutdown = true;
+					queueProcessor.interrupt();
+					break;
+				}
+				
+				// Wait for active futures to complete
+				for (CompletableFuture<Void> future : activeFutures) {
+					try {
+						future.join();
+					} catch (Exception e) {
+						// Request may have failed, continue with others
+					}
+				}
 			}
 		}
-	}
-	
-	/**
-	 * Shutdown the API and release resources.
-	 * Note: Does not shutdown the executor service as it's shared.
-	 */
-	public void shutdown() {
-		shutdown = true;
-		queueProcessor.interrupt();
 	}
 	
 	/**
@@ -192,7 +189,9 @@ public class ClearlyDefinedApi {
 				// If we don't know the rate limit yet, or we have capacity, submit the task
 				int remaining = rateLimitRemaining.get();
 				if (remaining == -1 || remaining > 0) {
-					executorService.submit(() -> processRequest(request));
+					synchronized (lock) {
+						executorService.submit(() -> processRequest(request));
+					}
 				} else {
 					// No capacity, put it back in the queue
 					requestQueue.offer(request);
@@ -229,79 +228,43 @@ public class ClearlyDefinedApi {
 			if (statusCode == 200) {
 				// Success - save via ContentHandler for persistent caching and update component
 				String body = response.body();
-				saveToPersistentCache(request.uri, body);
+				contentHandler.saveToCache(request.uri, body);
 				updateComponent(request.component, body);
 				request.future.complete(null);
 				
 			} else if (statusCode == 429) {
-				// Rate limited - requeue if retries left
-				if (request.retryCount < MAX_RETRIES) {
-					request.retryCount++;
-					System.err.println("Rate limited (429), re-queuing request (retry " + request.retryCount + "/" + MAX_RETRIES + "): " + request.uri);
-					requestQueue.offer(request);
-					
-					// Update our rate limit counter to 0 to trigger waiting
-					rateLimitRemaining.set(0);
-					
-					// Extract retry-after header if available
-					String retryAfter = response.headers().firstValue("Retry-After").orElse(null);
-					if (retryAfter != null) {
-						try {
-							long retryAfterSeconds = Long.parseLong(retryAfter);
-							rateLimitResetTime.set(System.currentTimeMillis() + (retryAfterSeconds * 1000));
-						} catch (NumberFormatException e) {
-							// Ignore if not a number
-						}
+				// Rate limited - requeue at end of queue
+				System.err.println("Rate limited (429), re-queuing request: " + request.uri);
+				requestQueue.offer(request);
+				
+				// Update our rate limit counter to 0 to trigger waiting
+				rateLimitRemaining.set(0);
+				
+				// Extract retry-after header if available
+				String retryAfter = response.headers().firstValue("Retry-After").orElse(null);
+				if (retryAfter != null) {
+					try {
+						long retryAfterSeconds = Long.parseLong(retryAfter);
+						rateLimitResetTime.set(System.currentTimeMillis() + (retryAfterSeconds * 1000));
+					} catch (NumberFormatException e) {
+						// Ignore if not a number
 					}
-				} else {
-					request.future.completeExceptionally(
-							new IOException("Max retries exceeded for ClearlyDefined request: " + request.uri));
 				}
 				
 			} else if (statusCode == 404) {
 				// Not found - save 404 to cache and complete normally
-				saveToPersistentCache404(request.uri);
+				contentHandler.saveToCache(request.uri, null);
 				request.future.complete(null);
 				
 			} else {
-				// Other error - fail the request
-				request.future.completeExceptionally(
-						new IOException("ClearlyDefined request failed with status " + statusCode + ": " + request.uri));
+				// Other error - requeue at end
+				System.err.println("Request failed with status " + statusCode + ", re-queuing: " + request.uri);
+				requestQueue.offer(request);
 			}
 			
 		} catch (IOException | InterruptedException e) {
-			if (request.retryCount < MAX_RETRIES) {
-				request.retryCount++;
-				requestQueue.offer(request);
-			} else {
-				request.future.completeExceptionally(e);
-			}
-		}
-	}
-	
-	/**
-	 * Save content to ContentHandler's persistent cache.
-	 */
-	private void saveToPersistentCache(URI uri, String content) {
-		try {
-			Path cachePath = contentHandler.getCachePath(uri);
-			Files.createDirectories(cachePath.getParent());
-			Files.writeString(cachePath, content);
-		} catch (IOException e) {
-			System.err.println("Failed to save to persistent cache: " + uri + " - " + e.getMessage());
-		}
-	}
-	
-	/**
-	 * Save 404 marker to ContentHandler's persistent cache.
-	 */
-	private void saveToPersistentCache404(URI uri) {
-		try {
-			Path cachePath404 = contentHandler.getCachePath404(uri);
-			Files.createDirectories(cachePath404.getParent());
-			Files.writeString(cachePath404, "");
-		} catch (IOException e) {
-			System.err.println("Failed to save 404 marker to persistent cache: " + uri + " - " + e.getMessage());
+			// Network error - requeue at end
+			requestQueue.offer(request);
 		}
 	}
 	

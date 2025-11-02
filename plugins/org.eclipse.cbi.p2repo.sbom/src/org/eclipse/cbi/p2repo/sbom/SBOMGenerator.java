@@ -506,7 +506,7 @@ public class SBOMGenerator extends AbstractApplication {
 		var executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() * 4);
 		
 		// Initialize ClearlyDefinedApi with the shared executor if needed
-		if (fetchClearlyDefined && clearlyDefinedApi == null) {
+		if (fetchClearlyDefined) {
 			clearlyDefinedApi = new ClearlyDefinedApi(contentHandler, executor, verbose);
 		}
 		
@@ -598,11 +598,6 @@ public class SBOMGenerator extends AbstractApplication {
 		progress.worked(1);
 		generateJson(bom);
 		progress.worked(1);
-		
-		// Cleanup ClearlyDefinedApi
-		if (clearlyDefinedApi != null) {
-			clearlyDefinedApi.shutdown();
-		}
 	}
 
 	@Override
