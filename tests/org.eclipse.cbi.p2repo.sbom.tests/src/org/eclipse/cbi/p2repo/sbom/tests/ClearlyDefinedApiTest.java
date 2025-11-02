@@ -1,13 +1,3 @@
-/**
- * Copyright (c) 2025 Eclipse contributors and others.
- *
- * This program and the accompanying materials
- * are made available under the terms of the Eclipse Public License 2.0
- * which accompanies this distribution, and is available at
- * https://www.eclipse.org/legal/epl-2.0/
- *
- * SPDX-License-Identifier: EPL-2.0
- */
 package org.eclipse.cbi.p2repo.sbom.tests;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -18,6 +8,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.cyclonedx.model.Component;
 import org.eclipse.cbi.p2repo.sbom.ClearlyDefinedApi;
+import org.eclipse.cbi.p2repo.sbom.ContentHandler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,10 +16,12 @@ import org.junit.jupiter.api.Test;
 public class ClearlyDefinedApiTest {
 
 	private ClearlyDefinedApi api;
+	private ContentHandler contentHandler;
 	
 	@BeforeEach
 	public void setUp() {
-		api = new ClearlyDefinedApi();
+		contentHandler = new ContentHandler(null); // Use temporary cache
+		api = new ClearlyDefinedApi(contentHandler);
 	}
 	
 	@AfterEach

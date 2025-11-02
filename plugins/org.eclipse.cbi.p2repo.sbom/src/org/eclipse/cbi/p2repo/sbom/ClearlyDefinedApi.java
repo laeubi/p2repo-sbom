@@ -15,6 +15,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Path;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -60,7 +61,7 @@ public class ClearlyDefinedApi {
 	private final HttpClient httpClient;
 	private final BlockingQueue<ClearlyDefinedRequest> requestQueue;
 	private final ExecutorService executorService;
-	private final ConcurrentHashMap<URI, String> cache;
+	private final ContentHandler contentHandler;
 	private final ConcurrentHashMap<CompletableFuture<Void>, Boolean> activeFutures;
 	
 	private final AtomicInteger rateLimitRemaining;
@@ -76,18 +77,18 @@ public class ClearlyDefinedApi {
 	private static final int WORKER_THREADS = 8;
 	private static final int TOTAL_THREADS = WORKER_THREADS + 1; // +1 for queue processor
 	
-	public ClearlyDefinedApi() {
-		this(false);
+	public ClearlyDefinedApi(ContentHandler contentHandler) {
+		this(contentHandler, false);
 	}
 	
-	public ClearlyDefinedApi(boolean verbose) {
+	public ClearlyDefinedApi(ContentHandler contentHandler, boolean verbose) {
+		this.contentHandler = contentHandler;
 		this.verbose = verbose;
 		this.httpClient = HttpClient.newBuilder()
 				.followRedirects(HttpClient.Redirect.NORMAL)
 				.build();
 		this.requestQueue = new LinkedBlockingQueue<>();
 		this.executorService = Executors.newFixedThreadPool(WORKER_THREADS);
-		this.cache = new ConcurrentHashMap<>();
 		this.activeFutures = new ConcurrentHashMap<>();
 		
 		this.rateLimitRemaining = new AtomicInteger(-1); // -1 means unknown
@@ -115,11 +116,18 @@ public class ClearlyDefinedApi {
 	 * @return a CompletableFuture that completes when the request is processed
 	 */
 	public CompletableFuture<Void> submitRequest(Component component, URI uri) {
-		// Check cache first
-		String cached = cache.get(uri);
-		if (cached != null) {
+		// Check cache first using ContentHandler
+		try {
+			String cached = contentHandler.getContent(uri);
 			updateComponent(component, cached);
 			return CompletableFuture.completedFuture(null);
+		} catch (ContentHandler.ContentHandlerException e) {
+			// Cache miss or 404 - need to fetch
+			if (e.statusCode() != 404) {
+				// Some other error - still queue it for retry
+			}
+		} catch (IOException e) {
+			// Cache miss - need to fetch
 		}
 		
 		ClearlyDefinedRequest request = new ClearlyDefinedRequest(component, uri);
@@ -237,9 +245,9 @@ public class ClearlyDefinedApi {
 			int statusCode = response.statusCode();
 			
 			if (statusCode == 200) {
-				// Success - cache the response and update component
+				// Success - save via ContentHandler for persistent caching and update component
 				String body = response.body();
-				cache.put(request.uri, body);
+				saveToPersistentCache(request.uri, body);
 				updateComponent(request.component, body);
 				request.future.complete(null);
 				
@@ -269,7 +277,8 @@ public class ClearlyDefinedApi {
 				}
 				
 			} else if (statusCode == 404) {
-				// Not found - complete normally (component won't be updated)
+				// Not found - save 404 to cache and complete normally
+				saveToPersistentCache404(request.uri);
 				request.future.complete(null);
 				
 			} else {
@@ -285,6 +294,32 @@ public class ClearlyDefinedApi {
 			} else {
 				request.future.completeExceptionally(e);
 			}
+		}
+	}
+	
+	/**
+	 * Save content to ContentHandler's persistent cache.
+	 */
+	private void saveToPersistentCache(URI uri, String content) {
+		try {
+			Path cachePath = contentHandler.getCachePath(uri);
+			java.nio.file.Files.createDirectories(cachePath.getParent());
+			java.nio.file.Files.writeString(cachePath, content);
+		} catch (IOException e) {
+			System.err.println("Failed to save to persistent cache: " + uri + " - " + e.getMessage());
+		}
+	}
+	
+	/**
+	 * Save 404 marker to ContentHandler's persistent cache.
+	 */
+	private void saveToPersistentCache404(URI uri) {
+		try {
+			Path cachePath404 = contentHandler.getCachePath404(uri);
+			java.nio.file.Files.createDirectories(cachePath404.getParent());
+			java.nio.file.Files.writeString(cachePath404, "");
+		} catch (IOException e) {
+			System.err.println("Failed to save 404 marker to persistent cache: " + uri + " - " + e.getMessage());
 		}
 	}
 	
