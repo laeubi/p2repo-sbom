@@ -135,9 +135,23 @@ public class ClearlyDefinedApi {
 	 * @throws InterruptedException if the wait is interrupted
 	 */
 	public void waitForCompletion() throws InterruptedException {
-		// Wait until the queue is empty and all futures are complete
+		// First wait for queue to drain and all active futures to complete
 		while (!requestQueue.isEmpty() || hasActiveFutures()) {
+			// Use a slightly longer sleep to reduce CPU usage in polling
 			Thread.sleep(100);
+		}
+		
+		// Give a final moment for any in-flight requests to update state
+		if (!activeFutures.isEmpty()) {
+			CompletableFuture<?>[] futuresArray = activeFutures.keySet().toArray(new CompletableFuture<?>[0]);
+			if (futuresArray.length > 0) {
+				try {
+					CompletableFuture.allOf(futuresArray).get(30, TimeUnit.SECONDS);
+				} catch (Exception e) {
+					// Log but don't fail - some requests may have legitimately failed
+					System.err.println("Some ClearlyDefined requests did not complete: " + e.getMessage());
+				}
+			}
 		}
 	}
 	
@@ -192,7 +206,11 @@ public class ClearlyDefinedApi {
 				} else {
 					// No capacity, put it back in the queue
 					requestQueue.offer(request);
-					Thread.sleep(1000); // Wait a bit before retrying
+					// Check if we have a reset time to wait for, otherwise use default backoff
+					long resetTime = rateLimitResetTime.get();
+					long now = System.currentTimeMillis();
+					long waitTime = (resetTime > now) ? Math.min(resetTime - now, 5000) : 1000;
+					Thread.sleep(waitTime);
 				}
 				
 			} catch (InterruptedException e) {
