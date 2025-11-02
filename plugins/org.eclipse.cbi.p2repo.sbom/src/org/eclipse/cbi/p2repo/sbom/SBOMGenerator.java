@@ -279,7 +279,7 @@ public class SBOMGenerator extends AbstractApplication {
 
 		fetchClearlyDefined = getArgument("-clearly-defined", args);
 		
-		clearlyDefinedApi = fetchClearlyDefined ? new ClearlyDefinedApi() : null;
+		clearlyDefinedApi = fetchClearlyDefined ? new ClearlyDefinedApi(verbose) : null;
 
 		uriRedirections = parseRedirections(getArguments("-redirections", args, List.of()));
 

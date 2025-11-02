@@ -70,11 +70,18 @@ public class ClearlyDefinedApi {
 	private volatile boolean shutdown;
 	private final Thread queueProcessor;
 	
+	private final boolean verbose;
+	
 	private static final int MAX_RETRIES = 3;
 	private static final int WORKER_THREADS = 8;
 	private static final int TOTAL_THREADS = WORKER_THREADS + 1; // +1 for queue processor
 	
 	public ClearlyDefinedApi() {
+		this(false);
+	}
+	
+	public ClearlyDefinedApi(boolean verbose) {
+		this.verbose = verbose;
 		this.httpClient = HttpClient.newBuilder()
 				.followRedirects(HttpClient.Redirect.NORMAL)
 				.build();
@@ -93,6 +100,10 @@ public class ClearlyDefinedApi {
 		this.queueProcessor = new Thread(this::processQueue, "ClearlyDefined-Queue-Processor");
 		this.queueProcessor.setDaemon(true);
 		this.queueProcessor.start();
+		
+		if (verbose) {
+			System.out.println("ClearlyDefinedApi initialized with " + WORKER_THREADS + " worker threads");
+		}
 	}
 	
 	/**
@@ -265,7 +276,11 @@ public class ClearlyDefinedApi {
 	private void updateRateLimitInfo(HttpResponse<?> response) {
 		response.headers().firstValue("x-ratelimit-limit").ifPresent(value -> {
 			try {
-				rateLimitTotal.set(Integer.parseInt(value));
+				int limit = Integer.parseInt(value);
+				rateLimitTotal.set(limit);
+				if (verbose) {
+					System.out.println("ClearlyDefined rate limit: " + limit);
+				}
 			} catch (NumberFormatException e) {
 				System.err.println("Invalid x-ratelimit-limit header: " + value);
 			}
@@ -275,6 +290,9 @@ public class ClearlyDefinedApi {
 			try {
 				int remaining = Integer.parseInt(value);
 				rateLimitRemaining.set(remaining);
+				if (verbose) {
+					System.out.println("ClearlyDefined rate limit remaining: " + remaining + "/" + rateLimitTotal.get());
+				}
 				if (remaining == 0) {
 					// If we hit the limit, try to get the reset time
 					response.headers().firstValue("x-ratelimit-reset").ifPresent(resetValue -> {
@@ -282,6 +300,9 @@ public class ClearlyDefinedApi {
 							// Reset time might be in seconds since epoch
 							long resetEpoch = Long.parseLong(resetValue);
 							rateLimitResetTime.set(resetEpoch * 1000); // Convert to milliseconds
+							if (verbose) {
+								System.out.println("ClearlyDefined rate limit reset at: " + new java.util.Date(resetEpoch * 1000));
+							}
 						} catch (NumberFormatException e) {
 							System.err.println("Invalid x-ratelimit-reset header: " + resetValue);
 						}
